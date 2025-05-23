@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Crée un répertoire pour les outils dans le dossier personnel
+# Ajoute ce répertoire au PATH du système
 TOOLS_DIR="$HOME/.dolibarr-checker/bin"
 mkdir -p "$TOOLS_DIR"
 export PATH="$TOOLS_DIR:$PATH"
@@ -13,15 +15,14 @@ BOLD='\033[1m'
 RESET='\033[0m'
 
 # 📦 Chemin du dépôt courant (module)
-MODULE_PATH=$(git rev-parse --show-toplevel)
-
 # Vérifie si on est dans un module Dolibarr
+MODULE_PATH=$(git rev-parse --show-toplevel)
 if [[ "$MODULE_PATH" != *"/custom/"* ]]; then
     echo -e "${YELLOW}⚠️  Hors d'un module Dolibarr (custom/). Aucun test exécuté.${RESET}"
     exit 0
 fi
 
-# 🔼 Remonter jusqu'à trouver le dossier htdocs contenant main.inc.php
+# Vérifie l'existence du fichier main.inc.php et stocke le chemin d'accès
 HTDOCS_PATH=""
 CURRENT="$MODULE_PATH"
 while [ "$CURRENT" != "/" ]; do
@@ -40,52 +41,79 @@ fi
 MAIN_INC="$HTDOCS_PATH/main.inc.php"
 echo -e "${GREEN}✔️  main.inc.php détecté : $MAIN_INC${RESET}"
 
-# ▶ Téléchargement de PHPUnit selon la version PHP
-PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')
-PHPUNIT_META_FILE="$TOOLS_DIR/.phpunit_version"
 
-get_phpunit_version() {
-    case "$PHP_VERSION" in
-        "7.1") echo "7" ;;
-        "7.4") echo "9" ;;
-        "8.0") echo "9" ;;
-        "8.1") echo "10" ;;
-        "8.2") echo "11" ;;
-        "8.3") echo "12" ;;
-        *) echo "" ;;
-    esac
-}
 
-PHPUNIT_VERSION=$(get_phpunit_version)
-PHPUNIT_BIN="$TOOLS_DIR/phpunit-$PHPUNIT_VERSION"
-PHPUNIT_URL="https://phar.phpunit.de/phpunit-$PHPUNIT_VERSION.phar"
+# Copie du fichier de configuration pre-commit
+CONFIG_SOURCE="${HTDOCS_PATH/htdocs/dev}"
+CONFIG_DEST="$MODULE_PATH/dev/"
 
-if [ ! -f "$PHPUNIT_BIN" ]; then
-    echo -e "${YELLOW}⬇️  Téléchargement de PHPUnit v$PHPUNIT_VERSION...${RESET}"
-    curl -sL -o "$PHPUNIT_BIN" "$PHPUNIT_URL"
-    chmod +x "$PHPUNIT_BIN"
-    echo "$PHP_VERSION" > "$PHPUNIT_META_FILE"
-    echo -e "${GREEN}✅ PHPUnit $PHPUNIT_VERSION installé.${RESET}"
+PRECOMMIT_SOURCE="$HTDOCS_PATH/../.pre-commit-config.yaml"
+PRECOMMIT_DEST="$MODULE_PATH/.pre-commit-config.yaml"
+
+echo -e "${BLUE}▶ Copie de la configuration pre-commit...${RESET}"
+if [ -d "$CONFIG_SOURCE" ]; then
+    cp -r "$CONFIG_SOURCE" "$CONFIG_DEST"
+    cp -r "$PRECOMMIT_SOURCE" "$PRECOMMIT_DEST"
+    echo -e "${GREEN}✅ Configuration pre-commit copiée avec succès.${RESET}"
+else
+    echo -e "${RED}❌ Le repertoire de configuration pre-commit non trouvé : $CONFIG_SOURCE${RESET}"
+    exit 1
+fi
+
+
+# ▶ Exécution de pre-commit
+echo -e "${BLUE}▶ Vérifications pre-commit...${RESET}"
+
+if ! command -v pre-commit &> /dev/null; then
+    echo -e "${RED}❌ pre-commit n'est pas installé. Installe-le avec 'pip install pre-commit'.${RESET}"
+    EXIT_CODE=1
 else
     echo -e "${GREEN}✅ PHPUnit $PHPUNIT_VERSION déjà présent.${RESET}"
 fi
 
-EXIT_CODE=0
+# ▶ Exécution de pre-commit
+echo -e "${BLUE}▶ Vérifications pre-commit...${RESET}"
 
+if ! command -v pre-commit &> /dev/null; then
+    echo -e "${RED}❌ pre-commit n'est pas installé. Installe-le avec 'pip install pre-commit'.${RESET}"
+    EXIT_CODE=1
+else
+    pre-commit gc  # Nettoyage des hooks obsolètes
 
-# ▶ PHPUnit
-echo -e "${BLUE}▶ Tests PHPUnit...${RESET}"
-if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
-    "$PHPUNIT_BIN" --teamcity | tee /tmp/phpunit.log
-    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-        echo -e "${RED}❌ Des tests ont échoué.${RESET}"
+    # Sauvegarde du répertoire courant
+    CURRENT_DIR=$(pwd)
+
+    # Exécution + capture propre du code retour
+    LOG_FILE="/tmp/pre-commit.log"
+    pre-commit run --config ".pre-commit-config.yaml" | tee "$LOG_FILE"
+    PRECOMMIT_EXIT=${PIPESTATUS[0]}
+
+    # Retour au répertoire initial
+    cd "$CURRENT_DIR"
+
+    if [ "$PRECOMMIT_EXIT" -ne 0 ]; then
+        echo -e "${RED}❌ Des erreurs ont été détectées par pre-commit.${RESET}"
+        echo -e "${YELLOW}📄 Contenu de $LOG_FILE :${RESET}"
+        cat "$LOG_FILE"
         EXIT_CODE=1
     else
-        echo -e "${GREEN}✅ Tous les tests sont passés.${RESET}"
+        echo -e "${GREEN}✅ Tous les hooks pre-commit sont passés.${RESET}"
     fi
-else
-    echo -e "${YELLOW}⚠️  Aucun fichier phpunit.xml trouvé, tests ignorés.${RESET}"
 fi
+
+# À la fin du script, avant de sortir :
+echo -e "${BLUE}▶ Nettoyage des fichiers temporaires...${RESET}"
+if [ -d "$CONFIG_DEST" ]; then
+    rm -r "$CONFIG_DEST"
+    rm -r "$PRECOMMIT_DEST"
+    echo -e "${GREEN}✅ Fichier de configuration temporaire supprimé.${RESET}"
+else
+    echo -e "${YELLOW}ℹ️ Aucun fichier temporaire à nettoyer.${RESET}"
+fi
+
+
+EXIT_CODE=0
+
 
 # 🧾 Résumé
 echo -e "${BLUE}---------------------------------------${RESET}"
