@@ -14,6 +14,9 @@ BLUE='\033[1;34m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
+EXIT_CODE=0
+
+
 # 📦 Chemin du dépôt courant (module)
 # Vérifie si on est dans un module Dolibarr
 MODULE_PATH=$(git rev-parse --show-toplevel)
@@ -60,17 +63,6 @@ else
     exit 1
 fi
 
-
-# ▶ Exécution de pre-commit
-echo -e "${BLUE}▶ Vérifications pre-commit...${RESET}"
-
-if ! command -v pre-commit &> /dev/null; then
-    echo -e "${RED}❌ pre-commit n'est pas installé. Installe-le avec 'pip install pre-commit'.${RESET}"
-    EXIT_CODE=1
-else
-    echo -e "${GREEN}✅ PHPUnit $PHPUNIT_VERSION déjà présent.${RESET}"
-fi
-
 # ▶ Exécution de pre-commit
 echo -e "${BLUE}▶ Vérifications pre-commit...${RESET}"
 
@@ -94,7 +86,6 @@ else
     if [ "$PRECOMMIT_EXIT" -ne 0 ]; then
         echo -e "${RED}❌ Des erreurs ont été détectées par pre-commit.${RESET}"
         echo -e "${YELLOW}📄 Contenu de $LOG_FILE :${RESET}"
-        cat "$LOG_FILE"
         EXIT_CODE=1
     else
         echo -e "${GREEN}✅ Tous les hooks pre-commit sont passés.${RESET}"
@@ -110,9 +101,6 @@ if [ -d "$CONFIG_DEST" ]; then
 else
     echo -e "${YELLOW}ℹ️ Aucun fichier temporaire à nettoyer.${RESET}"
 fi
-
-
-EXIT_CODE=0
 
 
 # 🧾 Résumé
