@@ -4,6 +4,12 @@
 # Script pour exécuter les hooks pre-commit de Dolibarr sur un module externe.
 # Il simule l'exécution depuis la racine de Dolibarr en copiant
 # temporairement la configuration nécessaire dans le module.
+
+# Diverses infos :
+# Pour lancer l'installation de ce script, il faut lancer le script ./install.sh
+# Le script ne se lance que sur les fichiers modifiés présent dans un repertoire custom
+# Le lancement de la partie codespell est cancel (qui vérifie que le code est bien en anglais)
+# Il est possible d'ignorer le lancement de ce script en procédant à un git commit --no-verify
 # ==============================================================================
 
 # --- Variables de couleur et d'état ---
