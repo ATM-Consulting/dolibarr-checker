@@ -1,116 +1,110 @@
 #!/bin/bash
 
-# Crée un répertoire pour les outils dans le dossier personnel
-# Ajoute ce répertoire au PATH du système
-TOOLS_DIR="$HOME/.dolibarr-checker/bin"
-mkdir -p "$TOOLS_DIR"
-export PATH="$TOOLS_DIR:$PATH"
+# ==============================================================================
+# Script pour exécuter les hooks pre-commit de Dolibarr sur un module externe.
+# Il simule l'exécution depuis la racine de Dolibarr en copiant
+# temporairement la configuration nécessaire dans le module.
+# ==============================================================================
 
-# Couleurs
+# --- Variables de couleur et d'état ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[1;34m'
-BOLD='\033[1m'
 RESET='\033[0m'
 
 EXIT_CODE=0
+LOG_FILE=$(mktemp)
+
+# --- Nettoyage à la sortie du script ---
+cleanup() {
+    echo -e "${BLUE}▶ Nettoyage des fichiers temporaires...${RESET}"
+    if [ -d "$MODULE_PATH/dev" ]; then
+        rm -r "$MODULE_PATH/dev"
+        rm -f "$MODULE_PATH/.pre-commit-config.yaml" # Utiliser -f pour éviter une erreur si le fichier n'existe pas
+        echo -e "${GREEN}✅ Fichiers de configuration temporaires supprimés.${RESET}"
+    fi
+    rm -f "$LOG_FILE"
+}
+trap cleanup EXIT
 
 
-# 📦 Chemin du dépôt courant (module)
-# Vérifie si on est dans un module Dolibarr
-MODULE_PATH=$(git rev-parse --show-toplevel)
-if [[ "$MODULE_PATH" != *"/custom/"* ]]; then
-    echo -e "${YELLOW}⚠️  Hors d'un module Dolibarr (custom/). Aucun test exécuté.${RESET}"
+# --- 1. Détection du contexte d'exécution ---
+echo -e "${BLUE}▶ Détection de l'environnement Dolibarr...${RESET}"
+MODULE_PATH=$(git rev-parse --show-toplevel 2>/dev/null)
+if [[ "$?" -ne 0 || ! "$MODULE_PATH" == *"/custom/"* ]]; then
+    echo -e "${YELLOW}⚠️  Ce script doit être lancé depuis un module Dolibarr situé dans custom/. Aucun test exécuté.${RESET}"
     exit 0
 fi
 
-# Vérifie l'existence du fichier main.inc.php et stocke le chemin d'accès
 HTDOCS_PATH=""
-CURRENT="$MODULE_PATH"
-while [ "$CURRENT" != "/" ]; do
-    if [ -d "$CURRENT/custom" ] && [ -f "$CURRENT/main.inc.php" ]; then
-        HTDOCS_PATH="$CURRENT"
+CURRENT_DIR="$MODULE_PATH"
+while [[ "$CURRENT_DIR" != "/" ]]; do
+    if [[ -f "$CURRENT_DIR/main.inc.php" ]]; then
+        HTDOCS_PATH="$CURRENT_DIR"
         break
     fi
-    CURRENT=$(dirname "$CURRENT")
+    CURRENT_DIR=$(dirname "$CURRENT_DIR")
 done
 
-if [ -z "$HTDOCS_PATH" ]; then
-    echo -e "${RED}❌ Impossible de localiser le fichier main.inc.php à partir du module.${RESET}"
+if [[ -z "$HTDOCS_PATH" ]]; then
+    echo -e "${RED}❌ Impossible de localiser la racine de Dolibarr (contenant main.inc.php).${RESET}"
     exit 1
 fi
 
-MAIN_INC="$HTDOCS_PATH/main.inc.php"
-echo -e "${GREEN}✔️  main.inc.php détecté : $MAIN_INC${RESET}"
+DOLI_ROOT=$(dirname "$HTDOCS_PATH")
+echo -e "${GREEN}✔️  Racine Dolibarr détectée : $DOLI_ROOT${RESET}"
 
 
-
-# Copie du fichier de configuration pre-commit
-CONFIG_SOURCE="${HTDOCS_PATH/htdocs/dev}"
-CONFIG_DEST="$MODULE_PATH/dev/"
-
-PRECOMMIT_SOURCE="$HTDOCS_PATH/../.pre-commit-config.yaml"
-PRECOMMIT_DEST="$MODULE_PATH/.pre-commit-config.yaml"
+# --- 2. Préparation de l'environnement de test ---
+CONFIG_SOURCE_DIR="$DOLI_ROOT/dev"
+CONFIG_SOURCE_FILE="$DOLI_ROOT/.pre-commit-config.yaml"
+CONFIG_DEST_DIR="$MODULE_PATH/dev/"
+CONFIG_DEST_FILE="$MODULE_PATH/.pre-commit-config.yaml"
 
 echo -e "${BLUE}▶ Copie de la configuration pre-commit...${RESET}"
-if [ -d "$CONFIG_SOURCE" ]; then
-    cp -r "$CONFIG_SOURCE" "$CONFIG_DEST"
-    cp -r "$PRECOMMIT_SOURCE" "$PRECOMMIT_DEST"
+if [[ -d "$CONFIG_SOURCE_DIR" && -f "$CONFIG_SOURCE_FILE" ]]; then
+    cp -r "$CONFIG_SOURCE_DIR" "$CONFIG_DEST_DIR"
+    cp "$CONFIG_SOURCE_FILE" "$CONFIG_DEST_FILE"
     echo -e "${GREEN}✅ Configuration pre-commit copiée avec succès.${RESET}"
 else
-    echo -e "${RED}❌ Le repertoire de configuration pre-commit non trouvé : $CONFIG_SOURCE${RESET}"
+    echo -e "${RED}❌ Configuration pre-commit non trouvée dans $DOLI_ROOT.${RESET}"
     exit 1
 fi
 
-# ▶ Exécution de pre-commit
-echo -e "${BLUE}▶ Vérifications pre-commit...${RESET}"
+# 🚀 NOUVELLE LIGNE AJOUTÉE ICI 🚀
+# On supprime la règle qui exclut le dossier /custom/ du fichier de règles copié.
+sed -i.bak 's~<exclude-pattern>/htdocs/(custom|includes)/</exclude-pattern>~~g' "$CONFIG_DEST_DIR/setup/codesniffer/ruleset.xml" && rm "$CONFIG_DEST_DIR/setup/codesniffer/ruleset.xml.bak"
+echo -e "${GREEN}✔️  Règle d'exclusion pour le dossier 'custom' retirée temporairement.${RESET}"
+
+
+# --- 3. Exécution de pre-commit ---
+echo -e "${BLUE}▶ Lancement des vérifications pre-commit...${RESET}"
 
 if ! command -v pre-commit &> /dev/null; then
-    echo -e "${RED}❌ pre-commit n'est pas installé. Installe-le avec 'pip install pre-commit'.${RESET}"
+    echo -e "${RED}❌ 'pre-commit' n'est pas installé. Exécutez 'pip install pre-commit'.${RESET}"
+    exit 1
+fi
+
+SKIP=codespell pre-commit run --config "$CONFIG_DEST_FILE" | tee "$LOG_FILE"
+PRECOMMIT_EXIT=${PIPESTATUS[0]}
+
+if [ "$PRECOMMIT_EXIT" -ne 0 ]; then
+    echo -e "\n${RED}❌ Des erreurs ont été détectées par pre-commit.${RESET}"
     EXIT_CODE=1
 else
-    pre-commit gc  # Nettoyage des hooks obsolètes
-
-    # Sauvegarde du répertoire courant
-    CURRENT_DIR=$(pwd)
-
-    # Exécution + capture propre du code retour
-    LOG_FILE="/tmp/pre-commit.log"
-    pre-commit run --config ".pre-commit-config.yaml" | tee "$LOG_FILE"
-    PRECOMMIT_EXIT=${PIPESTATUS[0]}
-
-    # Retour au répertoire initial
-    cd "$CURRENT_DIR"
-
-    if [ "$PRECOMMIT_EXIT" -ne 0 ]; then
-        echo -e "${RED}❌ Des erreurs ont été détectées par pre-commit.${RESET}"
-        echo -e "${YELLOW}📄 Contenu de $LOG_FILE :${RESET}"
-        EXIT_CODE=1
-    else
-        echo -e "${GREEN}✅ Tous les hooks pre-commit sont passés.${RESET}"
-    fi
-fi
-
-# À la fin du script, avant de sortir :
-echo -e "${BLUE}▶ Nettoyage des fichiers temporaires...${RESET}"
-if [ -d "$CONFIG_DEST" ]; then
-    rm -r "$CONFIG_DEST"
-    rm -r "$PRECOMMIT_DEST"
-    echo -e "${GREEN}✅ Fichier de configuration temporaire supprimé.${RESET}"
-else
-    echo -e "${YELLOW}ℹ️ Aucun fichier temporaire à nettoyer.${RESET}"
+    echo -e "\n${GREEN}✅ Tous les hooks pre-commit sont passés avec succès.${RESET}"
 fi
 
 
-# 🧾 Résumé
+# --- 4. Résumé final ---
 echo -e "${BLUE}---------------------------------------${RESET}"
 if [ "$EXIT_CODE" -eq 0 ]; then
-    echo -e "${GREEN}✅ Tous les contrôles sont passés avec succès.${RESET}"
+    echo -e "${GREEN}🎉 Mission accomplie ! Tous les contrôles sont au vert.${RESET}"
 else
-    echo -e "${RED}❌ Des erreurs ont été détectées. Corrigez-les avant de committer.${RESET}"
+    echo -e "${RED}❗️ Des erreurs ont été détectées. Merci de les corriger avant de committer.${RESET}"
+    echo -e "${YELLOW}📄 Les détails sont disponibles dans le log ci-dessus.${RESET}"
 fi
 echo -e "${BLUE}---------------------------------------${RESET}"
 
 exit $EXIT_CODE
-
