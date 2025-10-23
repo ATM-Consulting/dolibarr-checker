@@ -1,7 +1,3 @@
-Voici un `README.md` qui combine les prérequis pour l'installation du script *et* les prérequis pour son exécution au quotidien.
-
------
-
 ## Outil de Validation `dolibarr-check`
 
 Ce dépôt contient les scripts nécessaires pour installer un *hook Git global* (`pre-commit`) qui valide le code de vos modules externes Dolibarr avant chaque *commit*.
